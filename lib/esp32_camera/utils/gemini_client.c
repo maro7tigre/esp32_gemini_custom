@@ -22,13 +22,13 @@
      int timeout_ms;
      bool request_started;
      esp_err_t last_error;
- }
+ }; // Added missing semicolon here
  
  void gemini_client_free(void *ptr) {
      if (ptr) {
          free(ptr);
      }
- };
+ }
  
  /**
   * Implementation of Extract text from Gemini API response
@@ -300,8 +300,8 @@
  }
  
  esp_err_t gemini_client_start_request(gemini_client_handle_t client, 
-                                       const char *content_type,
-                                       int content_length) {
+                                        const char *content_type,
+                                        int content_length) {
      if (!client || !client->http_client || !content_type) {
          return ESP_ERR_INVALID_ARG;
      }
@@ -338,7 +338,7 @@
  }
  
  esp_err_t gemini_client_write(gemini_client_handle_t client, 
-                               const char *data, size_t len) {
+                                const char *data, size_t len) {
      if (!client || !client->http_client || !data) {
          return ESP_ERR_INVALID_ARG;
      }
@@ -363,7 +363,7 @@
  }
  
  esp_err_t gemini_client_finish_request(gemini_client_handle_t client, 
-                                       char **response, size_t *response_len) {
+                                        char **response, size_t *response_len) {
      if (!client || !client->http_client || !response || !response_len) {
          return ESP_ERR_INVALID_ARG;
      }
@@ -483,3 +483,4 @@
      // Reset state for next request
      client->request_started = false;
      return ESP_OK;
+ }
