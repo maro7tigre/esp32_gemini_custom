@@ -1,0 +1,44 @@
+{
+  "name": "ESP32-CAM Gemini",
+  "version": "1.0.0",
+  "description": "ESP32 camera driver optimized for OV2640 and Gemini API integration",
+  "keywords": "esp32, camera, ov2640, gemini, esp32-cam",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/esp32-cam-gemini"
+  },
+  "authors": [
+    {
+      "name": "Your Name",
+      "email": "your.email@example.com",
+      "maintainer": true
+    }
+  ],
+  "license": "Apache-2.0",
+  "frameworks": ["espidf", "arduino"],
+  "platforms": ["espressif32"],
+  "build": {
+    "flags": [
+      "-Idriver/include",
+      "-Iinclude",
+      "-Iutils",
+      "-Idriver/private_include",
+      "-Isensors/private_include",
+      "-Itarget/private_include"
+    ],
+    "includeDir": ".",
+    "srcDir": ".",
+    "srcFilter": [
+      "+<driver/esp_camera.c>",
+      "+<driver/cam_hal.c>",
+      "+<driver/sensor.c>",
+      "+<sensors/ov2640.c>",
+      "+<driver/sccb.c>",
+      "+<target/xclk.c>",
+      "+<target/esp32/ll_cam.c>",
+      "+<utils/esp_cam_base64.c>",
+      "+<utils/esp_cam_json.c>",
+      "+<utils/gemini_client.c>"
+    ]
+  }
+}
