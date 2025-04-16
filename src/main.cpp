@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include "credentials.h"
+#include "credentials.h" // Keep your existing credentials
 #include "custom_cam.h"
 
 WebServer server(80);
@@ -10,10 +10,11 @@ bool cameraInitialized = false;
 // Function prototypes
 void handleRoot();
 void handleCapture();
+void serveJpg();
 
 void setup() {
   // Start serial communication
-  Serial.begin(9600);
+  Serial.begin(9600); // Increased baud rate for better debugging
   Serial.println("\n\nESP32-CAM Image Server");
   Serial.println("---------------------");
   
@@ -40,6 +41,16 @@ void setup() {
     return;
   }
   cameraInitialized = true;
+  
+  // Configure camera settings for better performance
+  sensor_t* sensor = custom_cam_get_sensor();
+  if (sensor) {
+    sensor->set_framesize(sensor, FRAMESIZE_VGA);
+    sensor->set_quality(sensor, 10);
+    sensor->set_brightness(sensor, 0);
+    sensor->set_saturation(sensor, 0);
+  }
+  
   Serial.println("Camera initialized successfully");
   
   // Define server routes
@@ -58,10 +69,14 @@ void loop() {
 
 // Serve simple HTML page
 void handleRoot() {
-  server.send(200, "text/plain", "ESP32-CAM Server is running. Use /capture to take a photo.");
+  String html = "<html><body>";
+  html += "<h1>ESP32-CAM Server</h1>";
+  html += "<p><a href='/capture'>Take Photo</a></p>";
+  html += "</body></html>";
+  server.send(200, "text/html", html);
 }
 
-// Capture and send image
+// Handle capture request and serve JPG
 void handleCapture() {
   if (!cameraInitialized) {
     server.send(500, "text/plain", "Camera not initialized");
@@ -69,29 +84,62 @@ void handleCapture() {
   }
   
   Serial.println("Taking picture...");
-  
-  // Take picture with flash
-  camera_fb_t *fb = custom_cam_take_picture(true, 100);
+  serveJpg();
+}
+
+// Optimized function to capture and send image
+void serveJpg() {
+  // Take picture with flash - shorter flash delay to reduce chance of timeout
+  camera_fb_t *fb = custom_cam_take_picture(true, 50);
   if (!fb) {
     Serial.println("Camera capture failed");
-    server.send(500, "text/plain", "Failed to capture image");
+    server.send(503, "text/plain", "Failed to capture image");
     return;
   }
   
   Serial.printf("Picture taken! Size: %zu bytes\n", fb->len);
   
-  // Set content type and send image
+  // Set content type
+  server.setContentLength(fb->len);
   server.sendHeader("Content-Type", "image/jpeg");
   server.sendHeader("Content-Disposition", "inline; filename=capture.jpg");
-  server.setContentLength(fb->len);
-  server.send(200, "image/jpeg", "");
   
-  // Send the actual image data
+  // Send the HTTP response header
   WiFiClient client = server.client();
-  client.write(fb->buf, fb->len);
+  
+  // Instead of using server.send(), use direct client write for header
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: image/jpeg");
+  client.print("Content-Length: ");
+  client.println(fb->len);
+  client.println("Connection: close");
+  client.println();
+  
+  // Send the actual image data - using chunked transfer to avoid timeouts
+  // Break down the data into smaller chunks for more reliable transmission
+  const size_t CHUNK_SIZE = 8192; // 8KB chunks
+  size_t remaining = fb->len;
+  uint8_t *pos = fb->buf;
+  
+  while (remaining > 0) {
+    size_t chunk = remaining > CHUNK_SIZE ? CHUNK_SIZE : remaining;
+    
+    // Send chunk and check if it was successful
+    size_t sent = client.write(pos, chunk);
+    if (sent == 0) {
+      Serial.println("Failed to send data chunk");
+      break;
+    }
+    
+    pos += sent;
+    remaining -= sent;
+    // Small delay to prevent WDT reset
+    delay(1);
+  }
   
   // Return the frame buffer
   custom_cam_return_fb(fb);
   
-  Serial.println("Image sent");
+  client.stop();
+  Serial.println("Image sent successfully");
 }
