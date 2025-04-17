@@ -3,6 +3,7 @@
 #include <WebServer.h>
 #include "credentials.h" // Keep your existing credentials
 #include "custom_cam.h"
+#include "encoder.h"
 
 WebServer server(80);
 bool cameraInitialized = false;
@@ -10,7 +11,9 @@ bool cameraInitialized = false;
 // Function prototypes
 void handleRoot();
 void handleCapture();
+void handleBase64Capture();
 void serveJpg();
+void serveBase64();
 
 void setup() {
   // Start serial communication
@@ -56,11 +59,14 @@ void setup() {
   // Define server routes
   server.on("/", HTTP_GET, handleRoot);
   server.on("/capture", HTTP_GET, handleCapture);
+  server.on("/base64", HTTP_GET, handleBase64Capture);
   
   // Start server
   server.begin();
   Serial.println("HTTP server started");
-  Serial.println("\nReady! Use 'http://" + WiFi.localIP().toString() + "/capture' to take a photo");
+  Serial.println("\nReady! Use:");
+  Serial.println("- 'http://" + WiFi.localIP().toString() + "/capture' for regular JPEG");
+  Serial.println("- 'http://" + WiFi.localIP().toString() + "/base64' for Base64 encoded image");
 }
 
 void loop() {
@@ -71,20 +77,32 @@ void loop() {
 void handleRoot() {
   String html = "<html><body>";
   html += "<h1>ESP32-CAM Server</h1>";
-  html += "<p><a href='/capture'>Take Photo</a></p>";
+  html += "<p><a href='/capture'>Take Photo (JPEG)</a></p>";
+  html += "<p><a href='/base64'>Take Photo (Base64)</a></p>";
   html += "</body></html>";
   server.send(200, "text/html", html);
 }
 
-// Handle capture request and serve JPG
+// Handle regular JPEG capture request
 void handleCapture() {
   if (!cameraInitialized) {
     server.send(500, "text/plain", "Camera not initialized");
     return;
   }
   
-  Serial.println("Taking picture...");
+  Serial.println("Taking picture (JPEG)...");
   serveJpg();
+}
+
+// Handle Base64 encoded capture request
+void handleBase64Capture() {
+  if (!cameraInitialized) {
+    server.send(500, "text/plain", "Camera not initialized");
+    return;
+  }
+  
+  Serial.println("Taking picture (Base64)...");
+  serveBase64();
 }
 
 // Optimized function to capture and send image
@@ -142,4 +160,65 @@ void serveJpg() {
   
   client.stop();
   Serial.println("Image sent successfully");
+}
+
+// Function to capture and send Base64 encoded image
+void serveBase64() {
+  // Allocate memory for the Base64 string
+  size_t jpeg_size = 0;
+  size_t encoded_size = 0;
+  
+  // Use the efficient memory-managed function to capture and encode
+  char* base64_data = capture_jpeg_as_base64_alloc(true, &encoded_size, &jpeg_size);
+  
+  if (!base64_data) {
+    Serial.println("Failed to capture or encode image");
+    server.send(503, "text/plain", "Failed to capture or encode image");
+    return;
+  }
+  
+  Serial.printf("Picture encoded! Original: %zu bytes, Base64: %zu bytes\n", 
+                jpeg_size, encoded_size);
+  
+  // Send as plain text - browsers will display directly
+  server.setContentLength(encoded_size);
+  server.sendHeader("Content-Type", "text/plain");
+  server.sendHeader("Content-Disposition", "inline; filename=capture.txt");
+  
+  // Send the HTTP response header
+  WiFiClient client = server.client();
+  
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/plain");
+  client.print("Content-Length: ");
+  client.println(encoded_size);
+  client.println("Connection: close");
+  client.println();
+  
+  // Send the Base64 data in chunks
+  const size_t CHUNK_SIZE = 8192; // 8KB chunks
+  size_t remaining = encoded_size;
+  char *pos = base64_data;
+  
+  while (remaining > 0) {
+    size_t chunk = remaining > CHUNK_SIZE ? CHUNK_SIZE : remaining;
+    
+    // Send chunk and check if it was successful
+    size_t sent = client.write((uint8_t*)pos, chunk);
+    if (sent == 0) {
+      Serial.println("Failed to send data chunk");
+      break;
+    }
+    
+    pos += sent;
+    remaining -= sent;
+    // Small delay to prevent WDT reset
+    delay(1);
+  }
+  
+  // Free the allocated memory
+  free(base64_data);
+  
+  client.stop();
+  Serial.println("Base64 image sent successfully");
 }
