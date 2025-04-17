@@ -1,8 +1,8 @@
 /**
- * custom_cam.h - Simplified camera interface for ESP32-CAM
+ * custom_cam.h - Simplified camera interface for ESP32-CAM with Gemini integration
  * 
  * This file provides a minimal API for capturing images as Base64 strings
- * with no control parameters needed by the user.
+ * with Gemini API integration for image analysis.
  * 
  * Copyright (c) 2025 
  * Licensed under MIT License
@@ -29,13 +29,24 @@
  bool initCamera(void);
  
  /**
-  * Capture an image and convert it to Base64
-  * Uses the flash LED automatically
+  * Capture an image and convert it to a JSON payload with Base64 encoding
+  * for Gemini API, using the flash LED automatically
   * 
-  * @param encoded_size Optional pointer to receive the size of the encoded data
-  * @return Pointer to the Base64 encoded string (must be freed with free())
+  * @param prompt The text prompt to send to Gemini
+  * @param encoded_size Optional pointer to receive the size of the encoded JSON payload
+  * @param gemini_key The Gemini API key to use
+  * @return Pointer to the JSON payload string (must be freed with free())
   */
- char* captureImageAsBase64(size_t* encoded_size);
+ char* captureImageAsGeminiJson(const char* prompt, size_t* encoded_size, const char* gemini_key);
+ 
+ /**
+  * Send the image to Gemini API and get response
+  * 
+  * @param json_payload The JSON payload to send (created by captureImageAsGeminiJson)
+  * @param gemini_key The Gemini API key to use
+  * @return Pointer to the response string (must be freed with free()) or NULL on error
+  */
+ char* sendToGeminiAPI(const char* json_payload, const char* gemini_key);
  
  #ifdef __cplusplus
  }
