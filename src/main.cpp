@@ -10,15 +10,13 @@ bool cameraInitialized = false;
 
 // Function prototypes
 void handleRoot();
-void handleCapture();
 void handleBase64Capture();
-void serveJpg();
 void serveBase64();
 
 void setup() {
   // Start serial communication
   Serial.begin(9600); // Increased baud rate for better debugging
-  Serial.println("\n\nESP32-CAM Image Server");
+  Serial.println("\n\nESP32-CAM Base64 Image Server");
   Serial.println("---------------------");
   
   // Initialize WiFi
@@ -58,14 +56,12 @@ void setup() {
   
   // Define server routes
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/capture", HTTP_GET, handleCapture);
   server.on("/base64", HTTP_GET, handleBase64Capture);
   
   // Start server
   server.begin();
   Serial.println("HTTP server started");
   Serial.println("\nReady! Use:");
-  Serial.println("- 'http://" + WiFi.localIP().toString() + "/capture' for regular JPEG");
   Serial.println("- 'http://" + WiFi.localIP().toString() + "/base64' for Base64 encoded image");
 }
 
@@ -77,21 +73,9 @@ void loop() {
 void handleRoot() {
   String html = "<html><body>";
   html += "<h1>ESP32-CAM Server</h1>";
-  html += "<p><a href='/capture'>Take Photo (JPEG)</a></p>";
   html += "<p><a href='/base64'>Take Photo (Base64)</a></p>";
   html += "</body></html>";
   server.send(200, "text/html", html);
-}
-
-// Handle regular JPEG capture request
-void handleCapture() {
-  if (!cameraInitialized) {
-    server.send(500, "text/plain", "Camera not initialized");
-    return;
-  }
-  
-  Serial.println("Taking picture (JPEG)...");
-  serveJpg();
 }
 
 // Handle Base64 encoded capture request
@@ -101,65 +85,8 @@ void handleBase64Capture() {
     return;
   }
   
-  Serial.println("Taking picture (Base64)...");
+  Serial.println("Taking sequential pictures (Base64)...");
   serveBase64();
-}
-
-// Optimized function to capture and send image
-void serveJpg() {
-  // Take picture with flash - shorter flash delay to reduce chance of timeout
-  camera_fb_t *fb = custom_cam_take_picture(true, 50);
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    server.send(503, "text/plain", "Failed to capture image");
-    return;
-  }
-  
-  Serial.printf("Picture taken! Size: %zu bytes\n", fb->len);
-  
-  // Set content type
-  server.setContentLength(fb->len);
-  server.sendHeader("Content-Type", "image/jpeg");
-  server.sendHeader("Content-Disposition", "inline; filename=capture.jpg");
-  
-  // Send the HTTP response header
-  WiFiClient client = server.client();
-  
-  // Instead of using server.send(), use direct client write for header
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: image/jpeg");
-  client.print("Content-Length: ");
-  client.println(fb->len);
-  client.println("Connection: close");
-  client.println();
-  
-  // Send the actual image data - using chunked transfer to avoid timeouts
-  // Break down the data into smaller chunks for more reliable transmission
-  const size_t CHUNK_SIZE = 8192; // 8KB chunks
-  size_t remaining = fb->len;
-  uint8_t *pos = fb->buf;
-  
-  while (remaining > 0) {
-    size_t chunk = remaining > CHUNK_SIZE ? CHUNK_SIZE : remaining;
-    
-    // Send chunk and check if it was successful
-    size_t sent = client.write(pos, chunk);
-    if (sent == 0) {
-      Serial.println("Failed to send data chunk");
-      break;
-    }
-    
-    pos += sent;
-    remaining -= sent;
-    // Small delay to prevent WDT reset
-    delay(1);
-  }
-  
-  // Return the frame buffer
-  custom_cam_return_fb(fb);
-  
-  client.stop();
-  Serial.println("Image sent successfully");
 }
 
 // Function to capture and send Base64 encoded image
@@ -167,6 +94,20 @@ void serveBase64() {
   // Allocate memory for the Base64 string
   size_t jpeg_size = 0;
   size_t encoded_size = 0;
+  
+  // Take the first image and discard it
+  Serial.println("Taking first image (to discard)...");
+  camera_fb_t *first_fb = custom_cam_take_picture(true, 50);
+  if (first_fb) {
+    // Return the frame buffer immediately
+    custom_cam_return_fb(first_fb);
+  }
+  
+  // Wait for 50ms
+  delay(50);
+  
+  // Take the second image to use
+  Serial.println("Taking second image (to use)...");
   
   // Use the efficient memory-managed function to capture and encode
   char* base64_data = capture_jpeg_as_base64_alloc(true, &encoded_size, &jpeg_size);
