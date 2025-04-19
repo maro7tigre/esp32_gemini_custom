@@ -7,21 +7,49 @@
 // Add this to your credentials.h or define it here
 // #define GEMINI_API_KEY "your-api-key-here"
 
+// Pin definitions
+#define TRIGGER_PIN  12   // Input pin to trigger image capture
+#define OUTPUT_PIN   13   // Output pin for signaling results
+
+// Waste type definitions
+#define TYPE_PLASTIC    1
+#define TYPE_CARDBOARD  2
+#define TYPE_PAPER      3
+#define TYPE_OTHER      4
+#define TYPE_NONE       5
+#define TYPE_404        6
+
 WebServer server(80);
 bool cameraInitialized = false;
-unsigned long lastRequestTime = 0;
-const unsigned long requestDelay = 1000; // 1 second between requests
+bool processingImage = false;
+char* lastJsonPayload = NULL;
+size_t lastJsonSize = 0;
 
 // Default prompt for trash classification
 const char* DEFAULT_PROMPT = "I want a short answer for which trash type do you see in the image [plastic, cardboard, paper or other], don't write anything else other than one of this list, if you can't see any trash just say None";
 
+// Function prototypes
+void setupServer();
+int parseGeminiResponse(const char* response);
+void signalResult(int wasteType);
+char* captureImage();
+char* processWithGemini(char* jsonPayload);
+
+// MARK: Setup
 void setup() {
   // Start serial communication
-  Serial.begin(9600); // keep it for compatibility with older versions
+  Serial.begin(9600);
   delay(1000); // Allow serial to initialize
   
-  Serial.println("\n\nESP32-CAM Base64 Image Server with Gemini AI");
+  Serial.println("\n\nESP32-CAM Trash Classification System");
   Serial.println("---------------------");
+  
+  // Setup trigger pin as input with pull-down
+  pinMode(TRIGGER_PIN, INPUT_PULLDOWN);
+  
+  // Setup output pin
+  pinMode(OUTPUT_PIN, OUTPUT);
+  digitalWrite(OUTPUT_PIN, LOW);
   
   // Initialize WiFi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -57,115 +85,162 @@ void setup() {
   
   Serial.println("Camera initialized successfully");
   
-  // Define server routes
-  server.on("/", HTTP_GET, []() {
-    String html = "<html><body>";
-    html += "<h1>ESP32-CAM Server with Gemini AI</h1>";
-    html += "<p><a href='/photo'>Take Photo and Analyze</a></p>";
-    html += "<p><a href='/photo?ai=false'>Take Photo without AI</a></p>";
-    html += "</body></html>";
-    server.send(200, "text/html", html);
-  });
-  
-  server.on("/photo", HTTP_GET, []() {
-    // Check if we're being spammed with requests
-    unsigned long currentTime = millis();
-    if (currentTime - lastRequestTime < requestDelay) {
-      server.send(429, "text/plain", "Too many requests. Please wait.");
-      return;
-    }
-    lastRequestTime = currentTime;
-    
-    if (!cameraInitialized) {
-      server.send(500, "text/plain", "Camera not initialized");
-      return;
-    }
-    
-    // Check if AI analysis is requested
-    bool useAI = true;
-    if (server.hasArg("ai")) {
-      useAI = server.arg("ai").equalsIgnoreCase("true");
-    }
-    
-    // Get custom prompt if provided
-    const char* prompt = DEFAULT_PROMPT;
-    if (server.hasArg("prompt")) {
-      prompt = server.arg("prompt").c_str();
-    }
-    
-    Serial.println("Photo requested" + String(useAI ? " with AI analysis" : ""));
-    
-    // Get image as JSON payload for Gemini
-    size_t encoded_size = 0;
-    char* json_payload = captureImageAsGeminiJson(prompt, &encoded_size, GEMINI_API_KEY);
-    
-    if (!json_payload) {
-      server.send(503, "text/plain", "Failed to capture image");
-      return;
-    }
-    
-    // Process with Gemini if AI is requested, but just log the response
-    if (useAI) {
-      Serial.println("Sending to Gemini API...");
-      char* gemini_response = sendToGeminiAPI(json_payload, GEMINI_API_KEY);
-      
-      if (gemini_response) {
-        // Print response to serial only
-        Serial.println("Gemini API Response:");
-        Serial.println(gemini_response);
-        
-        // Free the response memory
-        free(gemini_response);
-      }
-    }
-    
-    // Send as JSON
-    server.setContentLength(encoded_size);
-    server.sendHeader("Content-Type", "application/json");
-    server.sendHeader("Content-Disposition", "inline; filename=capture.json");
-    
-    // Send the HTTP response header
-    WiFiClient client = server.client();
-    
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.print("Content-Length: ");
-    client.println(encoded_size);
-    client.println("Connection: close");
-    client.println();
-    
-    // Send the JSON data in chunks
-    const size_t CHUNK_SIZE = 8192; // 8KB chunks
-    size_t remaining = encoded_size;
-    char *pos = json_payload;
-    
-    while (remaining > 0) {
-      size_t chunk = remaining > CHUNK_SIZE ? CHUNK_SIZE : remaining;
-      size_t sent = client.write((uint8_t*)pos, chunk);
-      if (sent == 0) {
-        Serial.println("Failed to send data chunk");
-        break;
-      }
-      
-      pos += sent;
-      remaining -= sent;
-      delay(1);  // Small delay to prevent WDT reset
-    }
-    
-    // Free the allocated memory
-    free(json_payload);
-    
-    client.stop();
-    Serial.println("JSON payload sent successfully");
-  });
+  // Setup server
+  setupServer();
   
   // Start server
   server.begin();
   Serial.println("HTTP server started");
-  Serial.println("\nReady! Use 'http://" + WiFi.localIP().toString() + "/photo' for JSON with Base64 encoded image and Gemini analysis");
+  Serial.println("System ready - waiting for trigger signal on pin 12");
 }
 
+// MARK: Loop
 void loop() {
+  // Handle web requests
   server.handleClient();
-  delay(10); // Small delay to prevent watchdog timer issues
+  
+  // Check if trigger pin is HIGH and not already processing
+  if (digitalRead(TRIGGER_PIN) == HIGH && !processingImage && cameraInitialized) {
+    processingImage = true;
+    
+    Serial.println("Trigger detected! Starting image capture process");
+    
+    // Step 1: Capture image
+    Serial.println("Step 1: Capturing image...");
+    char* jsonPayload = captureImage();
+    
+    if (!jsonPayload) {
+      Serial.println("Image capture failed");
+      processingImage = false;
+      return;
+    }
+    Serial.println("Image captured successfully");
+    
+    // Step 2: Process with Gemini API
+    Serial.println("Step 2: Sending to Gemini API...");
+    char* geminiResponse = processWithGemini(jsonPayload);
+    
+    if (!geminiResponse) {
+      Serial.println("Gemini API processing failed");
+      
+      // Still save the JSON for viewing even if Gemini fails
+      if (lastJsonPayload) {
+        free(lastJsonPayload);
+      }
+      lastJsonPayload = jsonPayload;
+      
+      processingImage = false;
+      return;
+    }
+    Serial.println("Gemini API processing successful :");
+    Serial.println(geminiResponse);
+
+    // Step 3: Parse the response
+    Serial.println("Step 3: Parsing response...");
+    int wasteType = parseGeminiResponse(geminiResponse);
+    
+
+
+    // Step 4: Signal the result
+    Serial.println("Step 4: Signaling result...");
+    signalResult(wasteType);
+    
+    // Free the response memory
+    free(geminiResponse);
+    
+    // Save the JSON for the web server
+    if (lastJsonPayload) {
+      free(lastJsonPayload);
+    }
+    lastJsonPayload = jsonPayload;
+    
+    Serial.println("Process complete. Waiting for trigger to go LOW...");
+    
+    // Step 5: Wait for trigger to go LOW again
+    while (digitalRead(TRIGGER_PIN) == HIGH) {
+      server.handleClient();
+      delay(10);
+    }
+    
+    Serial.println("Trigger signal is LOW. Ready for next trigger.");
+    processingImage = false;
+  }
+  
+  // Small delay to prevent watchdog timer issues
+  delay(10);
+}
+
+void setupServer() {
+  // Simple home page
+  server.on("/", HTTP_GET, []() {
+    String html = "<html><body>";
+    html += "<h1>ESP32-CAM Trash Classification System</h1>";
+    html += "<p>System running and waiting for trigger signal on pin 12</p>";
+    html += "<p><a href='/photo'>View Latest Capture</a></p>";
+    html += "</body></html>";
+    server.send(200, "text/html", html);
+  });
+  
+  // Route to serve the latest JSON payload
+  server.on("/photo", HTTP_GET, []() {
+    if (!lastJsonPayload) {
+      server.send(404, "text/plain", "No image has been captured yet");
+      return;
+    }
+    
+    // Send as JSON
+    server.sendHeader("Content-Type", "application/json");
+    server.sendHeader("Content-Disposition", "inline; filename=capture.json");
+    
+    // Determine the length
+    size_t jsonLength = strlen(lastJsonPayload);
+    
+    // Send the JSON data
+    server.send(200, "application/json", lastJsonPayload);
+  });
+}
+
+char* captureImage() {
+  // Get image as JSON payload for Gemini
+  size_t encodedSize = 0;
+  return captureImageAsGeminiJson(DEFAULT_PROMPT, &encodedSize, GEMINI_API_KEY);
+}
+
+char* processWithGemini(char* jsonPayload) {
+  return sendToGeminiAPI(jsonPayload, GEMINI_API_KEY);
+}
+
+int parseGeminiResponse(const char* response) {
+  // Convert to lowercase for case-insensitive comparison
+  String resp = String(response);
+  resp.toLowerCase();
+  
+  // Simple keyword detection
+  if (resp.indexOf("plastic") >= 0) {
+    Serial.println("Detected Plastic");
+    return TYPE_PLASTIC;
+  } else if (resp.indexOf("cardboard") >= 0) {
+    Serial.println("Detected Cardboard");
+    return TYPE_CARDBOARD;
+  } else if (resp.indexOf("paper") >= 0) {
+    Serial.println("Detected Paper");
+    return TYPE_PAPER;
+  } else if (resp.indexOf("other") >= 0) {
+    Serial.println("Detected Other");
+    return TYPE_OTHER;
+  } else if (resp.indexOf("none") >= 0) {
+    Serial.println("Detected None");
+    return TYPE_NONE;
+  }
+  
+  // Default to OTHER if we can't determine
+  Serial.println("Detected 404");
+  return TYPE_404;
+}
+
+void signalResult(int wasteType) {
+  // Single signal with length corresponding to waste type
+  digitalWrite(OUTPUT_PIN, HIGH);
+  delay(50 * wasteType);  // Length corresponds to waste type
+  digitalWrite(OUTPUT_PIN, LOW);
 }
