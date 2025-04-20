@@ -4,8 +4,7 @@
  * This file provides a minimal API for capturing images as Base64 strings
  * with Gemini API integration for image analysis.
  * 
- * Copyright (c) 2025 
- * Licensed under MIT License
+ * Licensed under GNU General Public License v3.0
  */
 
  #ifndef CUSTOM_CAM_H

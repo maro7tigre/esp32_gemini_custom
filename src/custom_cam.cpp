@@ -4,10 +4,8 @@
  * This file implements a minimal API for capturing images as JSON payloads
  * with Gemini API integration for image analysis.
  * 
- * Copyright (c) 2025 
- * Licensed under MIT License
+ * Licensed under GNU General Public License v3.0
  */
-
  #include "custom_cam.h"
  #include <Arduino.h>
  #include "esp_camera.h"
@@ -50,6 +48,7 @@
  /**
   * Initialize the camera with optimized settings
   */
+ // MARK: -Initialize Camera
  bool initCamera(void) {
      // Set up the flash LED using Arduino functions
      pinMode(4, OUTPUT);
@@ -126,6 +125,7 @@
  /**
   * Calculate required size for Base64 encoding
   */
+ // MARK: -Base64 Length
  static size_t calculateBase64Length(size_t input_length) {
      return ((input_length + 2) / 3 * 4) + 1;  // +1 for null terminator
  }
@@ -134,6 +134,7 @@
   * Encode directly to JSON output buffer with minimal memory usage
   * The function writes directly to the output buffer, building the JSON payload as it goes
   */
+ // MARK: -Encode to JSON
  static size_t encodeDirectlyToGeminiJson(
      const uint8_t* input_data, 
      size_t input_length, 
@@ -234,6 +235,7 @@
  /**
   * Capture an image and convert it to a JSON payload for Gemini API
   */
+ // MARK: -Capture Img as JSON
  char* captureImageAsGeminiJson(const char* prompt, size_t* encoded_size, const char* gemini_key) {
      if (!prompt || !gemini_key) {
          ESP_LOGE(TAG, "Prompt or API key is NULL");
