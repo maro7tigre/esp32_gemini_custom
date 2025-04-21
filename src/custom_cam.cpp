@@ -4,14 +4,14 @@
 #include "driver/gpio.h"
 #include <WiFiClientSecure.h>
 
-// Base64 encoding table
+// MARK: Base64 Encoding
 static const char base64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-// Gemini API host
+// MARK: Gemini API Config
 static const char* GEMINI_HOST = "generativelanguage.googleapis.com";
 static const int GEMINI_PORT = 443;
 
-// ESP32-CAM pin definitions (hardcoded for AI-Thinker ESP32-CAM)
+// MARK: Camera Pins
 #define CAM_PIN_PWDN    32
 #define CAM_PIN_RESET   -1
 #define CAM_PIN_XCLK    0
@@ -32,12 +32,13 @@ static const int GEMINI_PORT = 443;
 // Flash LED pin
 #define FLASH_GPIO_PIN  4
 
+// MARK: Camera Initialize
 bool initCamera(void) {
     // Set up flash LED
     pinMode(FLASH_GPIO_PIN, OUTPUT);
     digitalWrite(FLASH_GPIO_PIN, LOW);
     
-    // Camera configuration
+    // Camera configuration - set to UXGA quality
     camera_config_t camera_config = {
         .pin_pwdn = CAM_PIN_PWDN,
         .pin_reset = CAM_PIN_RESET,
@@ -59,8 +60,8 @@ bool initCamera(void) {
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
         .pixel_format = PIXFORMAT_JPEG,
-        .frame_size = FRAMESIZE_VGA,  // 640x480, less memory than UXGA
-        .jpeg_quality = 10,           // Good quality (0-63, lower is better)
+        .frame_size = FRAMESIZE_UXGA,  // 1600x1200 UXGA for higher quality
+        .jpeg_quality = 10,            // Good quality (0-63, lower is better)
         .fb_count = 2,
         .fb_location = CAMERA_FB_IN_PSRAM,
         .grab_mode = CAMERA_GRAB_LATEST
@@ -81,18 +82,28 @@ bool initCamera(void) {
         sensor->set_sharpness(sensor, 0);      
         sensor->set_denoise(sensor, 1);        
         sensor->set_whitebal(sensor, 1);       
-        sensor->set_exposure_ctrl(sensor, 1);  
+        sensor->set_exposure_ctrl(sensor, 1);  // Auto-exposure on
+        sensor->set_gain_ctrl(sensor, 1);      // Auto gain control on
+        sensor->set_aec2(sensor, 1);           // Auto exposure correction on
     }
     
     return true;
 }
 
-// Calculate base64 encoded length
+// MARK: Static Capture
+camera_fb_t* captureStaticFrame() {
+    const uint32_t threshold = 100000;
+    const int max_attempts = 100;
+    // TODO: add motion detection
+    return esp_camera_fb_get();
+}
+
+// MARK: Base64 Utils
 static size_t calculateBase64Length(size_t input_length) {
     return ((input_length + 2) / 3 * 4) + 1;  // +1 for null terminator
 }
 
-// Encode image to JSON format for Gemini API
+// MARK: Encode to JSON
 static size_t encodeToGeminiJson(
     const uint8_t* input_data, 
     size_t input_length, 
@@ -185,6 +196,7 @@ static size_t encodeToGeminiJson(
     return pos - output_buffer;
 }
 
+// MARK: Capture Image
 char* captureImageAsGeminiJson(const char* prompt, size_t* encoded_size, const char* gemini_key) {
     if (!prompt || !gemini_key) {
         return NULL;
@@ -195,7 +207,7 @@ char* captureImageAsGeminiJson(const char* prompt, size_t* encoded_size, const c
     delay(75);  // Wait for flash to stabilize
     
     // Capture frame
-    camera_fb_t* fb = esp_camera_fb_get();
+    camera_fb_t* fb = captureStaticFrame();
     
     // Turn off flash immediately
     digitalWrite(FLASH_GPIO_PIN, LOW);
@@ -237,6 +249,7 @@ char* captureImageAsGeminiJson(const char* prompt, size_t* encoded_size, const c
     return json_buffer;
 }
 
+// MARK: Gemini API
 char* sendToGeminiAPI(const char* json_payload, const char* gemini_key) {
     if (!json_payload || !gemini_key) {
         return NULL;

@@ -5,16 +5,27 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "esp_camera.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * Initialize the camera with optimized settings
+ * Initialize the camera with UXGA quality settings
  * @return true if successful, false on error
  */
 bool initCamera(void);
+
+/**
+ * Capture a stable frame by detecting minimal changes between consecutive frames
+ * 
+ * This function temporarily disables auto-exposure to get stable frames
+ * and returns the current frame when it's static enough
+ * 
+ * @return Pointer to captured frame buffer or NULL on failure (must be freed with esp_camera_fb_return())
+ */
+camera_fb_t* captureStaticFrame(void);
 
 /**
  * Capture an image and convert it to a JSON payload for Gemini API
